@@ -8,8 +8,6 @@ from torchvision import transforms
 import numpy as np
 from ultralytics import YOLO
 import time
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-import av
 
 # Load the models
 attendance_model_path = 'mobilenetv2_scripted.pth' 
@@ -17,7 +15,7 @@ attendance_model = torch.jit.load(attendance_model_path, map_location=torch.devi
 attentiveness_model_path = 'best.pt'
 attentiveness_model = YOLO(attentiveness_model_path)
 
-# Set model to evaluation mode
+# No need to load the state dictionary again since we are using scripted model
 attendance_model.eval()
 
 # Load class names
@@ -49,38 +47,16 @@ transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-def video_frame_callback(frame):
-    img = frame.to_ndarray(format="bgr24")
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = attentiveness_model(img_rgb)
-
-    max_conf = -1
-    max_label = None
-    max_box = None
-
-    for result in results:
-        boxes = result.boxes.xyxy.cpu().numpy()
-        confidences = result.boxes.conf.cpu().numpy()
-        for box, conf in zip(boxes, confidences):
-            if conf > max_conf:
-                max_conf = conf
-                max_box = box
-                max_label = 'Sleepy' if conf > 0.5 else 'Focused'
-
-    if max_box is not None and max_label is not None:
-        x1, y1, x2, y2 = map(int, max_box)
-        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-        cv2.putText(img, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
-        if max_label == 'Sleepy':
-            st.session_state.sleepy_time += 1
-
-    return av.VideoFrame.from_ndarray(img, format="bgr24")
-
 # Load and preprocess image for attendance
 def load_and_preprocess_image_attendance(path):
     img = Image.open(path).convert('RGB')
     img = transform(img)
     img = img.unsqueeze(0)  # Add batch dimension
+    return img
+
+# Load and preprocess image for attentiveness
+def load_and_preprocess_image_attentiveness(img):
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
 
 # Attendance section
@@ -99,8 +75,6 @@ def attendance_tracker():
 # Attentiveness section
 def attentiveness_tracker():
     st.title("Attentiveness Tracker")
-    
-    # Initialize session state variables
     if 'run' not in st.session_state:
         st.session_state.run = False
     if 'start_time' not in st.session_state:
@@ -118,39 +92,53 @@ def attentiveness_tracker():
         total_time = time.time() - st.session_state.start_time
         focused_time = total_time - st.session_state.sleepy_time
         if focused_time < 0:
-            focused_time = 0
+            focused_time = 0  # Ensure focused_time is not negative
         st.write(f'Total Time: {int(total_time // 3600)} hours, {int((total_time % 3600) // 60)} minutes, {int(total_time % 60)} seconds')
         st.write(f'Focused Time: {int(focused_time // 3600)} hours, {int((focused_time % 3600) // 60)} minutes, {int(focused_time % 60)} seconds')
-        st.write(f'Sleepy Time: {int(st.session_state.sleepy_time // 3600)} hours, {int((st.session_state.sleepy_time % 3600) // 60)} minutes, {int(st.session_state % 60)} seconds')
+        st.write(f'Sleepy Time: {int(st.session_state.sleepy_time // 3600)} hours, {int((st.session_state.sleepy_time % 3600) // 60)} minutes, {int(st.session_state.sleepy_time % 60)} seconds')
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.button('Start Webcam', on_click=start_webcam)
-    with col2:
-        st.button('Stop Webcam', on_click=stop_webcam)
+    start_button = st.button('Start Webcam')
+    stop_button = st.button('Stop Webcam')
 
-    if st.session_state.run:
-        try:
-            ctx = webrtc_streamer(
-                key="attentiveness",
-                mode=WebRtcMode.SENDRECV,
-                rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-                video_frame_callback=video_frame_callback,
-                async_processing=True,
-            )
-        except Exception as e:
-            st.error(f"Error accessing webcam: {str(e)}")
-            st.session_state.run = False
+    if start_button:
+        start_webcam()
+    if stop_button:
+        stop_webcam()
+
+    FRAME_WINDOW = st.image([])
+    
+    while st.session_state.run:
+        img_file_buffer = st.camera_input("Camera")
+        if img_file_buffer is not None:
+            img = load_and_preprocess_image_attentiveness(np.array(Image.open(img_file_buffer)))
+            results = attentiveness_model(img)
+
+            max_conf = -1
+            max_label = None
+            max_box = None
+
+            for result in results:
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confidences = result.boxes.conf.cpu().numpy()
+                for box, conf in zip(boxes, confidences):
+                    if conf > max_conf:
+                        max_conf = conf
+                        max_box = box
+                        max_label = 'Sleepy' if conf > 0.5 else 'Focused'
+
+            if max_box is not None and max_label is not None:
+                x1, y1, x2, y2 = map(int, max_box)
+                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(img, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+                if max_label == 'Sleepy':
+                    st.session_state.sleepy_time += 1
+
+            FRAME_WINDOW.image(img, channels='RGB')
 
 # Main app
 def main():
-    st.set_page_config(page_title="Attendance & Attentiveness System", layout="wide")
-    
-    app_mode = st.sidebar.selectbox(
-        "Choose the app mode",
-        ["Attendance Tracker", "Attentiveness Tracker"]
-    )
-    
+    app_mode = st.sidebar.selectbox("Choose the app mode",
+        ["Attendance Tracker", "Attentiveness Tracker"])
     if app_mode == "Attendance Tracker":
         attendance_tracker()
     elif app_mode == "Attentiveness Tracker":
