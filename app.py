@@ -10,7 +10,7 @@ from ultralytics import YOLO
 import time
 
 # Load the models
-attendance_model_path = 'mobilenetv2_scripted.pth' 
+attendance_model_path = 'resnet18_scripted.pth' 
 attendance_model = torch.jit.load(attendance_model_path, map_location=torch.device('cpu'))
 attentiveness_model_path = 'best.pt'
 attentiveness_model = YOLO(attentiveness_model_path)
@@ -52,11 +52,6 @@ def load_and_preprocess_image_attendance(path):
     img = Image.open(path).convert('RGB')
     img = transform(img)
     img = img.unsqueeze(0)  # Add batch dimension
-    return img
-
-# Load and preprocess image for attentiveness
-def load_and_preprocess_image_attentiveness(img):
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
 
 # Attendance section
@@ -107,33 +102,40 @@ def attentiveness_tracker():
 
     FRAME_WINDOW = st.image([])
     
+    cap = cv2.VideoCapture(0)
+
     while st.session_state.run:
-        img_file_buffer = st.camera_input("Camera")
-        if img_file_buffer is not None:
-            img = load_and_preprocess_image_attentiveness(np.array(Image.open(img_file_buffer)))
-            results = attentiveness_model(img)
+        ret, frame = cap.read()
+        if not ret:
+            st.write("Failed to capture image.")
+            break
 
-            max_conf = -1
-            max_label = None
-            max_box = None
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = attentiveness_model(img)
 
-            for result in results:
-                boxes = result.boxes.xyxy.cpu().numpy()
-                confidences = result.boxes.conf.cpu().numpy()
-                for box, conf in zip(boxes, confidences):
-                    if conf > max_conf:
-                        max_conf = conf
-                        max_box = box
-                        max_label = 'Sleepy' if conf > 0.5 else 'Focused'
+        max_conf = -1
+        max_label = None
+        max_box = None
 
-            if max_box is not None and max_label is not None:
-                x1, y1, x2, y2 = map(int, max_box)
-                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(img, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
-                if max_label == 'Sleepy':
-                    st.session_state.sleepy_time += 1
+        for result in results:
+            boxes = result.boxes.xyxy.cpu().numpy()
+            confidences = result.boxes.conf.cpu().numpy()
+            for box, conf in zip(boxes, confidences):
+                if conf > max_conf:
+                    max_conf = conf
+                    max_box = box
+                    max_label = 'Sleepy' if conf > 0.5 else 'Focused'
 
-            FRAME_WINDOW.image(img, channels='RGB')
+        if max_box is not None and max_label is not None:
+            x1, y1, x2, y2 = map(int, max_box)
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.putText(img, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+            if max_label == 'Sleepy':
+                st.session_state.sleepy_time += 1
+
+        FRAME_WINDOW.image(img, channels='RGB')
+    
+    cap.release()
 
 # Main app
 def main():
