@@ -73,67 +73,36 @@ def attendance_tracker():
         st.image(uploaded_file, use_container_width=True)
 
 # Attentiveness section
-def attentiveness_tracker():
-    st.title("Attentiveness Tracker")
-    if 'run' not in st.session_state:
-        st.session_state.run = False
-    if 'start_time' not in st.session_state:
-        st.session_state.start_time = 0
-    if 'sleepy_time' not in st.session_state:
-        st.session_state.sleepy_time = 0
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import av
 
-    def start_webcam():
-        st.session_state.run = True
-        st.session_state.start_time = time.time()
-        st.session_state.sleepy_time = 0
+def video_frame_callback(frame):
+    img = frame.to_ndarray(format="bgr24")
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = attentiveness_model(img_rgb)
 
-    def stop_webcam():
-        st.session_state.run = False
-        total_time = time.time() - st.session_state.start_time
-        focused_time = total_time - st.session_state.sleepy_time
-        if focused_time < 0:
-            focused_time = 0
-        st.write(f'Total Time: {int(total_time // 3600)} hours, {int((total_time % 3600) // 60)} minutes, {int(total_time % 60)} seconds')
-        st.write(f'Focused Time: {int(focused_time // 3600)} hours, {int((focused_time % 3600) // 60)} minutes, {int(focused_time % 60)} seconds')
-        st.write(f'Sleepy Time: {int(st.session_state.sleepy_time // 3600)} hours, {int((st.session_state.sleepy_time % 3600) // 60)} minutes, {int(st.session_state.sleepy_time % 60)} seconds')
+    max_conf = -1
+    max_label = None
+    max_box = None
 
-    st.button('Start Webcam', on_click=start_webcam)
-    st.button('Stop Webcam', on_click=stop_webcam)
+    for result in results:
+        boxes = result.boxes.xyxy.cpu().numpy()
+        confidences = result.boxes.conf.cpu().numpy()
+        for box, conf in zip(boxes, confidences):
+            if conf > max_conf:
+                max_conf = conf
+                max_box = box
+                max_label = 'Sleepy' if conf > 0.5 else 'Focused'
+
+    if max_box is not None and max_label is not None:
+        x1, y1, x2, y2 = map(int, max_box)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+        cv2.putText(img, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+        if max_label == 'Sleepy':
+            st.session_state.sleepy_time += 1
+
+    return av.VideoFrame.from_ndarray(img, format="bgr24")
     
-    # Replace VideoCapture with st.camera_input
-    camera_input = st.camera_input("Camera")
-    
-    if camera_input is not None and st.session_state.run:
-        # Convert the image from bytes to opencv format
-        bytes_data = camera_input.getvalue()
-        frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-        
-        img = load_and_preprocess_image_attentiveness(frame)
-        results = attentiveness_model(img)
-
-        max_conf = -1
-        max_label = None
-        max_box = None
-
-        for result in results:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confidences = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confidences):
-                if conf > max_conf:
-                    max_conf = conf
-                    max_box = box
-                    max_label = 'Sleepy' if conf > 0.5 else 'Focused'
-
-        if max_box is not None and max_label is not None:
-            x1, y1, x2, y2 = map(int, max_box)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(frame, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
-            if max_label == 'Sleepy':
-                st.session_state.sleepy_time += 1
-
-        # Display the processed frame
-        st.image(frame, channels='BGR')
-
 # Main app
 def main():
     app_mode = st.sidebar.selectbox("Choose the app mode",
