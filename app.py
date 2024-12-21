@@ -8,6 +8,7 @@ from torchvision import transforms
 import numpy as np
 from ultralytics import YOLO
 import time
+import tempfile
 
 # Load the models
 attendance_model_path = 'mobilenetv2_scripted.pth' 
@@ -54,6 +55,11 @@ def load_and_preprocess_image_attendance(path):
     img = img.unsqueeze(0)  # Add batch dimension
     return img
 
+# Load and preprocess image for attentiveness
+def load_and_preprocess_image_attentiveness(img):
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
+
 # Attendance section
 def attendance_tracker():
     st.title("Attendance Tracker")
@@ -70,72 +76,74 @@ def attendance_tracker():
 # Attentiveness section
 def attentiveness_tracker():
     st.title("Attentiveness Tracker")
-    if 'run' not in st.session_state:
-        st.session_state.run = False
-    if 'start_time' not in st.session_state:
-        st.session_state.start_time = 0
-    if 'sleepy_time' not in st.session_state:
-        st.session_state.sleepy_time = 0
-
-    def start_webcam():
-        st.session_state.run = True
-        st.session_state.start_time = time.time()
-        st.session_state.sleepy_time = 0
-
-    def stop_webcam():
-        st.session_state.run = False
-        total_time = time.time() - st.session_state.start_time
-        focused_time = total_time - st.session_state.sleepy_time
-        if focused_time < 0:
-            focused_time = 0  # Ensure focused_time is not negative
-        st.write(f'Total Time: {int(total_time // 3600)} hours, {int((total_time % 3600) // 60)} minutes, {int(total_time % 60)} seconds')
-        st.write(f'Focused Time: {int(focused_time // 3600)} hours, {int((focused_time % 3600) // 60)} minutes, {int(focused_time % 60)} seconds')
-        st.write(f'Sleepy Time: {int(st.session_state.sleepy_time // 3600)} hours, {int((st.session_state.sleepy_time % 3600) // 60)} minutes, {int(st.session_state.sleepy_time % 60)} seconds')
-
-    start_button = st.button('Start Webcam')
-    stop_button = st.button('Stop Webcam')
-
-    if start_button:
-        start_webcam()
-    if stop_button:
-        stop_webcam()
-
-    FRAME_WINDOW = st.image([])
     
-    cap = cv2.VideoCapture(0)
-
-    while st.session_state.run:
-        ret, frame = cap.read()
-        if not ret:
-            st.write("Failed to capture image.")
-            break
-
-        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = attentiveness_model(img)
-
-        max_conf = -1
-        max_label = None
-        max_box = None
-
-        for result in results:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confidences = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confidences):
-                if conf > max_conf:
-                    max_conf = conf
-                    max_box = box
-                    max_label = 'Sleepy' if conf > 0.5 else 'Focused'
-
-        if max_box is not None and max_label is not None:
-            x1, y1, x2, y2 = map(int, max_box)
-            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(img, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
-            if max_label == 'Sleepy':
-                st.session_state.sleepy_time += 1
-
-        FRAME_WINDOW.image(img, channels='RGB')
+    uploaded_video = st.file_uploader("Upload a video...", type=['mp4', 'avi', 'mov'])
     
-    cap.release()
+    if uploaded_video is not None:
+        # Save uploaded video to temporary file
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(uploaded_video.read())
+        
+        # Process video
+        video = cv2.VideoCapture(tfile.name)
+        
+        total_time = 0
+        sleepy_time = 0
+        FRAME_WINDOW = st.image([])
+        
+        # Process button
+        if st.button('Process Video'):
+            progress_bar = st.progress(0)
+            total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = int(video.get(cv2.CAP_PROP_FPS))
+            
+            frame_count = 0
+            while video.isOpened():
+                ret, frame = video.read()
+                if not ret:
+                    break
+                
+                total_time += 1/fps  # Add time based on FPS
+                
+                img = load_and_preprocess_image_attentiveness(frame)
+                results = attentiveness_model(img)
+
+                max_conf = -1
+                max_label = None
+                max_box = None
+
+                for result in results:
+                    boxes = result.boxes.xyxy.cpu().numpy()
+                    confidences = result.boxes.conf.cpu().numpy()
+                    for box, conf in zip(boxes, confidences):
+                        if conf > max_conf:
+                            max_conf = conf
+                            max_box = box
+                            max_label = 'Sleepy' if conf > 0.5 else 'Focused'
+
+                if max_box is not None and max_label is not None:
+                    x1, y1, x2, y2 = map(int, max_box)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    cv2.putText(frame, max_label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+                    if max_label == 'Sleepy':
+                        sleepy_time += 1/fps  # Add time based on FPS
+
+                FRAME_WINDOW.image(frame, channels='BGR')
+                
+                # Update progress bar
+                frame_count += 1
+                progress_bar.progress(frame_count / total_frames)
+            
+            video.release()
+            
+            # Display statistics
+            focused_time = total_time - sleepy_time
+            if focused_time < 0:
+                focused_time = 0
+                
+            st.write(f'Total Time: {int(total_time // 3600)} hours, {int((total_time % 3600) // 60)} minutes, {int(total_time % 60)} seconds')
+            st.write(f'Focused Time: {int(focused_time // 3600)} hours, {int((focused_time % 3600) // 60)} minutes, {int(focused_time % 60)} seconds')
+            st.write(f'Sleepy Time: {int(sleepy_time // 3600)} hours, {int((sleepy_time % 3600) // 60)} minutes, {int(sleepy_time % 60)} seconds')
 
 # Main app
 def main():
