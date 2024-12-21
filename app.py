@@ -92,17 +92,22 @@ def attentiveness_tracker():
         total_time = time.time() - st.session_state.start_time
         focused_time = total_time - st.session_state.sleepy_time
         if focused_time < 0:
-            focused_time = 0  # Ensure focused_time is not negative
+            focused_time = 0
         st.write(f'Total Time: {int(total_time // 3600)} hours, {int((total_time % 3600) // 60)} minutes, {int(total_time % 60)} seconds')
         st.write(f'Focused Time: {int(focused_time // 3600)} hours, {int((focused_time % 3600) // 60)} minutes, {int(focused_time % 60)} seconds')
         st.write(f'Sleepy Time: {int(st.session_state.sleepy_time // 3600)} hours, {int((st.session_state.sleepy_time % 3600) // 60)} minutes, {int(st.session_state.sleepy_time % 60)} seconds')
 
     st.button('Start Webcam', on_click=start_webcam)
     st.button('Stop Webcam', on_click=stop_webcam)
-    FRAME_WINDOW = st.image([])
-    camera = cv2.VideoCapture(0)
-    while st.session_state.run:
-        _, frame = camera.read()
+    
+    # Replace VideoCapture with st.camera_input
+    camera_input = st.camera_input("Camera")
+    
+    if camera_input is not None and st.session_state.run:
+        # Convert the image from bytes to opencv format
+        bytes_data = camera_input.getvalue()
+        frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        
         img = load_and_preprocess_image_attentiveness(frame)
         results = attentiveness_model(img)
 
@@ -126,7 +131,8 @@ def attentiveness_tracker():
             if max_label == 'Sleepy':
                 st.session_state.sleepy_time += 1
 
-        FRAME_WINDOW.image(frame, channels='RGB')
+        # Display the processed frame
+        st.image(frame, channels='BGR')
 
 # Main app
 def main():
