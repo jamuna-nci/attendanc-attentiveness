@@ -11,7 +11,7 @@ import time
 import tempfile
 
 # Load the models
-attendance_model_path = 'mobilenetv2scripted.pth' 
+attendance_model_path = 'mobilenetv2_scripted.pth' 
 attendance_model = torch.jit.load(attendance_model_path, map_location=torch.device('cpu'))
 attentiveness_model_path = 'best.pt'
 attentiveness_model = YOLO(attentiveness_model_path)
